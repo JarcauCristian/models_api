@@ -1,3 +1,4 @@
+import decimal
 import json
 import os
 import mlflow
@@ -201,7 +202,7 @@ async def update_score(model_id: str, score: float):
         session.close()
         return JSONResponse(content="Model ID Not Found!", status_code=404)
 
-    result.score += score
+    result.score += decimal.Decimal(score)
 
     result.score_count += 1
 
