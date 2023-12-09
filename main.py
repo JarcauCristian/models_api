@@ -1,10 +1,12 @@
 import json
 import os
 import mlflow
+import numpy
 import pandas as pd
 import uvicorn
 from fastapi import FastAPI, UploadFile
 from dotenv import load_dotenv
+from mlflow import MlflowClient
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -21,16 +23,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
-
-os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv('MLFLOW_TRACKING_USERNAME')
-os.environ['MLFLOW_TRACKING_PASSWORD'] = os.getenv('MLFLOW_TRACKING_PASSWORD')
-os.environ['AWS_ACCESS_KEY_ID'] = os.getenv('AWS_ACCESS_KEY_ID')
-os.environ['AWS_SECRET_ACCESS_KEY'] = os.getenv('AWS_SECRET_ACCESS_KEY')
-os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv('MLFLOW_S3_ENDPOINT_URL')
-os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = os.getenv('MLFLOW_TRACKING_INSECURE_TLS')
-os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
-
-mlflow.set_tracking_uri("https://mlflow2.sedimark.work")
 
 Base = declarative_base()
 
@@ -74,8 +66,8 @@ async def models():
             "model_id": row.model_id,
             "model_name": row.model_name,
             "description": row.description,
-            "created_at": row.created_at,
-            "score": row.score
+            "created_at": str(row.created_at),
+            "score": round(float(row.score / row.score_count), 2)
         })
 
     session.close()
@@ -93,13 +85,26 @@ async def model(model_id: str):
         return JSONResponse(content="No model found with that ID.", status_code=404)
 
     session.close()
-    return JSONResponse(content=results[0], status_code=200)
+
+    model_data = {
+        "model_id": results[0].model_id,
+        "model_name": results[0].model_name,
+        "description": results[0].description,
+        "created_at": str(results[0].created_at),
+        "score": round(float(float(results[0].score) / float(results[0].score_count)), 2) if float(results[0].score_count) > 0 else 0
+    }
+
+    return JSONResponse(content=model_data, status_code=200)
 
 
 @app.post("/prediction")
 async def prediction(model_id: str, file: UploadFile):
     if file.content_type != "text/csv":
         return JSONResponse(content="Only CSV files Allowed!", status_code=400)
+
+    os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
+
+    mlflow.set_tracking_uri("https://mlflow.sedimark.work")
 
     session = Session()
 
@@ -140,11 +145,34 @@ async def prediction(model_id: str, file: UploadFile):
     if numeric_columns != numeric_count or categorical_columns != categorical_count or unique_identifiers_columns != unique_identifier_count:
         return JSONResponse(content="Dataset format does not match the model input!", status_code=400)
 
-    sk_model = mlflow.sklearn.load_model(f"runs/{model_id}/model")
+    sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
 
-    predictions = sk_model.predict(df)
+    predictions: numpy.ndarray = sk_model.predict(df)
+    data = {}
 
-    return JSONResponse(content=predictions, status_code=200)
+    for i, row in enumerate(predictions):
+        data[i] = round(float(row), 2)
+
+    return JSONResponse(content=data, status_code=200)
+
+
+@app.get("/model_details")
+async def model_details(model_id: str):
+    session = Session()
+
+    results = session.query(MyTable).filter(MyTable.model_id == model_id).first()
+
+    if results is None:
+        session.close()
+        return JSONResponse(content="Model ID Not Found!", status_code=404)
+
+    session.close()
+
+    client = MlflowClient(tracking_uri="https://mlflow.sedimark.work")
+    data = client.get_run(model_id).data
+    tags = {k: v for k, v in data.tags.items() if not k.startswith("mlflow.")}
+
+    return JSONResponse(content={"params": data.params, "metrics": data.metrics, "tags": tags}, status_code=200)
 
 
 @app.get("/model_score")
