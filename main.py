@@ -5,6 +5,7 @@ import pandas as pd
 import uvicorn
 from fastapi import FastAPI, UploadFile
 from dotenv import load_dotenv
+from pydantic import BaseModel
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -33,6 +34,11 @@ os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
 mlflow.set_tracking_uri("https://mlflow2.sedimark.work")
 
 Base = declarative_base()
+
+
+class Score(BaseModel):
+    model_id: str
+    score: float
 
 
 class MyTable(Base):
@@ -86,7 +92,7 @@ async def models():
 async def model(model_id: str):
     session = Session()
 
-    results = session.query(MyTable).filter(MyTable.model_id == model_id).all()
+    results = session.query(MyTable).filter(model_id == MyTable.model_id).all()
 
     if len(results) == 0:
         session.close()
@@ -103,13 +109,13 @@ async def prediction(model_id: str, file: UploadFile):
 
     session = Session()
 
-    results = session.query(MyTable).filter(MyTable.model_id == model_id).first()
+    results = session.query(MyTable).filter(model_id == MyTable.model_id).first()
 
     if results is None:
         session.close()
         return JSONResponse(content="Model ID Not Found!", status_code=404)
 
-    model_description = json.loads(results.description)
+    model_description = json.loads(str(results.description))
 
     session.close()
 
@@ -120,7 +126,8 @@ async def prediction(model_id: str, file: UploadFile):
 
     numeric_columns = sum(1 for value in model_description["column_ranges"].values() if value is not None)
     categorical_columns = sum(1 for value in model_description["column_categories"].values() if value is not None)
-    unique_identifiers_columns = sum(1 for value in model_description["column_unique_values"].values() if value is not None)
+    unique_identifiers_columns = sum(1 for value in model_description["column_unique_values"].values()
+                                     if value is not None)
 
     columns = list(df.columns)
 
@@ -137,7 +144,8 @@ async def prediction(model_id: str, file: UploadFile):
             else:
                 categorical_count += 1
 
-    if numeric_columns != numeric_count or categorical_columns != categorical_count or unique_identifiers_columns != unique_identifier_count:
+    if (numeric_columns != numeric_count or categorical_columns != categorical_count or unique_identifiers_columns !=
+            unique_identifier_count):
         return JSONResponse(content="Dataset format does not match the model input!", status_code=400)
 
     sk_model = mlflow.sklearn.load_model(f"runs/{model_id}/model")
@@ -151,7 +159,7 @@ async def prediction(model_id: str, file: UploadFile):
 async def model_score(model_id: str):
     session = Session()
 
-    result = session.query(MyTable).filter(MyTable.model_id == model_id).first()
+    result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
 
     if result is None:
         session.close()
@@ -161,19 +169,19 @@ async def model_score(model_id: str):
 
 
 @app.post("/update_score")
-async def update_score(model_id: str, score: float):
-    if score < 0 or score > 10:
+async def update_score(score: Score):
+    if score.score < 0 or score.score > 10:
         return JSONResponse(content="Score should be between 0 and 10!", status_code=400)
 
     session = Session()
 
-    result = session.query(MyTable).filter(MyTable.model_id == model_id).first()
+    result = session.query(MyTable).filter(score.model_id == MyTable.model_id).first()
 
     if result is None:
         session.close()
         return JSONResponse(content="Model ID Not Found!", status_code=404)
 
-    result.score += score
+    result.score += score.score
 
     result.score_count += 1
 
