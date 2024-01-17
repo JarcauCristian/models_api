@@ -1,15 +1,20 @@
+import decimal
 import json
 import os
 import mlflow
+import numpy
 import pandas as pd
 import uvicorn
 from fastapi import FastAPI, UploadFile
 from dotenv import load_dotenv
 from pydantic import BaseModel
+from mlflow import MlflowClient
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import create_engine, Column, String, DateTime, Numeric, Integer
+
+from redis_cache import is_data_stale, get_data_from_redis, set_data_in_redis, update_timestamp
 
 app = FastAPI()
 
@@ -22,16 +27,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
-
-os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv('MLFLOW_TRACKING_USERNAME')
-os.environ['MLFLOW_TRACKING_PASSWORD'] = os.getenv('MLFLOW_TRACKING_PASSWORD')
-os.environ['AWS_ACCESS_KEY_ID'] = os.getenv('AWS_ACCESS_KEY_ID')
-os.environ['AWS_SECRET_ACCESS_KEY'] = os.getenv('AWS_SECRET_ACCESS_KEY')
-os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv('MLFLOW_S3_ENDPOINT_URL')
-os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = os.getenv('MLFLOW_TRACKING_INSECURE_TLS')
-os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
-
-mlflow.set_tracking_uri("https://mlflow2.sedimark.work")
 
 Base = declarative_base()
 
@@ -65,47 +60,79 @@ async def connection_test():
 
 @app.get("/models")
 async def models():
+    cache_key = "models_list"
+    if not is_data_stale(cache_key, 600):
+        cached_data = get_data_from_redis(cache_key)
+        if cached_data:
+            return JSONResponse(content=cached_data, status_code=200)
+
     session = Session()
 
-    results = session.query(MyTable).all()
+    try:
+        results = session.query(MyTable).all()
 
-    models_list = []
+        if not results:
+            return JSONResponse(content="No models found", status_code=404)
 
-    if len(results) == 0:
+        models_list = []
+        for row in results:
+            models_list.append({
+                "model_id": row.model_id,
+                "model_name": row.model_name,
+                "description": row.description,
+                "created_at": str(row.created_at),
+                "score": round(float(row.score / row.score_count), 2)
+            })
+
+        set_data_in_redis(cache_key, models_list, 600)
+        update_timestamp(cache_key)
+
+        return JSONResponse(content=models_list, status_code=200)
+    finally:
         session.close()
-        return JSONResponse(content="No models found", status_code=404)
-
-    for row in results:
-        models_list.append({
-            "model_id": row.model_id,
-            "model_name": row.model_name,
-            "description": row.description,
-            "created_at": row.created_at,
-            "score": row.score
-        })
-
-    session.close()
-    return JSONResponse(content=models_list, status_code=200)
 
 
 @app.get("/model")
 async def model(model_id: str):
+    cache_key = f"model_details_{model_id}"
+    if not is_data_stale(cache_key, 3600):
+        cached_data = get_data_from_redis(cache_key)
+        if cached_data:
+            return JSONResponse(content=cached_data, status_code=200)
+
     session = Session()
 
-    results = session.query(MyTable).filter(model_id == MyTable.model_id).all()
+    try:
+        results = session.query(MyTable).filter(model_id == MyTable.model_id).all()
 
-    if len(results) == 0:
+        if not results:
+            return JSONResponse(content="No model found with that ID.", status_code=404)
+
+        model_data = {
+            "model_id": results[0].model_id,
+            "model_name": results[0].model_name,
+            "description": results[0].description,
+            "created_at": str(results[0].created_at),
+            "score": round(float(results[0].score) / float(results[0].score_count), 2) if results[
+                                                                                              0].score_count > 0 else 0
+        }
+
+        set_data_in_redis(cache_key, model_data, 3600)
+        update_timestamp(cache_key)
+
+        return JSONResponse(content=model_data, status_code=200)
+    finally:
         session.close()
-        return JSONResponse(content="No model found with that ID.", status_code=404)
-
-    session.close()
-    return JSONResponse(content=results[0], status_code=200)
 
 
 @app.post("/prediction")
 async def prediction(model_id: str, file: UploadFile):
     if file.content_type != "text/csv":
         return JSONResponse(content="Only CSV files Allowed!", status_code=400)
+
+    os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
+
+    mlflow.set_tracking_uri("https://mlflow.sedimark.work")
 
     session = Session()
 
@@ -148,12 +175,46 @@ async def prediction(model_id: str, file: UploadFile):
             unique_identifier_count):
         return JSONResponse(content="Dataset format does not match the model input!", status_code=400)
 
-    sk_model = mlflow.sklearn.load_model(f"runs/{model_id}/model")
+    sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
 
-    predictions = sk_model.predict(df)
+    predictions: numpy.ndarray = sk_model.predict(df)
+    data = {}
 
-    return JSONResponse(content=predictions, status_code=200)
+    for i, row in enumerate(predictions):
+        data[i] = round(float(row), 2)
 
+    return JSONResponse(content=data, status_code=200)
+
+
+@app.get("/model_details")
+async def model_details(model_id: str):
+    cache_key = f"model_details_{model_id}"
+    if not is_data_stale(cache_key, 3600):
+        cached_data = get_data_from_redis(cache_key)
+        if cached_data:
+            return JSONResponse(content=cached_data, status_code=200)
+
+    session = Session()
+
+    try:
+        result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
+
+        if result is None:
+            return JSONResponse(content="Model ID Not Found!", status_code=404)
+
+        client = MlflowClient(tracking_uri="https://mlflow.sedimark.work")
+        data = client.get_run(model_id).data
+        tags = {k: v for k, v in data.tags.items() if not k.startswith("mlflow.")}
+
+        model_details_data = {"params": data.params, "metrics": data.metrics, "tags": tags}
+
+        # Update cache with new data
+        set_data_in_redis(cache_key, model_details_data, 3600)
+        update_timestamp(cache_key)
+
+        return JSONResponse(content=model_details_data, status_code=200)
+    finally:
+        session.close()
 
 @app.get("/model_score")
 async def model_score(model_id: str):
@@ -181,7 +242,7 @@ async def update_score(score: Score):
         session.close()
         return JSONResponse(content="Model ID Not Found!", status_code=404)
 
-    result.score += score.score
+    result.score += decimal.Decimal(score.score)
 
     result.score_count += 1
 
