@@ -58,9 +58,43 @@ async def connection_test():
     return JSONResponse(content="Server Works!", status_code=200)
 
 
-@app.get("/models")
+@app.get("/model/user")
+async def models(user_id: str):
+    cache_key = f"models_list_{user_id}"
+    if not is_data_stale(cache_key, 600):
+        cached_data = get_data_from_redis(cache_key)
+        if cached_data:
+            return JSONResponse(content=cached_data, status_code=200)
+
+    session = Session()
+
+    try:
+        results = session.query(MyTable).filter(user_id == MyTable.user_id).all()
+
+        if not results:
+            return JSONResponse(content="No models found", status_code=404)
+
+        models_list = []
+        for row in results:
+            models_list.append({
+                "model_id": row.model_id,
+                "model_name": row.model_name,
+                "description": row.description,
+                "created_at": str(row.created_at),
+                "score": round(float(row.score / row.score_count), 2)
+            })
+
+        set_data_in_redis(cache_key, models_list, 600)
+        update_timestamp(cache_key)
+
+        return JSONResponse(content=models_list, status_code=200)
+    finally:
+        session.close()
+
+
+@app.get("/model/all")
 async def models():
-    cache_key = "models_list"
+    cache_key = f"models_list"
     if not is_data_stale(cache_key, 600):
         cached_data = get_data_from_redis(cache_key)
         if cached_data:
@@ -78,6 +112,7 @@ async def models():
         for row in results:
             models_list.append({
                 "model_id": row.model_id,
+                "user_id": row.user_id,
                 "model_name": row.model_name,
                 "description": row.description,
                 "created_at": str(row.created_at),
@@ -215,6 +250,7 @@ async def model_details(model_id: str):
         return JSONResponse(content=model_details_data, status_code=200)
     finally:
         session.close()
+
 
 @app.get("/model_score")
 async def model_score(model_id: str):
