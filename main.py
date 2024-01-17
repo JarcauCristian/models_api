@@ -94,11 +94,11 @@ async def models(user_id: str):
 
 @app.get("/model/all")
 async def models():
-    cache_key = f"models_list"
-    if not is_data_stale(cache_key, 600):
-        cached_data = get_data_from_redis(cache_key)
-        if cached_data:
-            return JSONResponse(content=cached_data, status_code=200)
+    # cache_key = f"models_list"
+    # if not is_data_stale(cache_key, 600):
+    #     cached_data = get_data_from_redis(cache_key)
+    #     if cached_data:
+    #         return JSONResponse(content=cached_data, status_code=200)
 
     session = Session()
 
@@ -119,8 +119,8 @@ async def models():
                 "score": round(float(row.score / row.score_count), 2)
             })
 
-        set_data_in_redis(cache_key, models_list, 600)
-        update_timestamp(cache_key)
+        # set_data_in_redis(cache_key, models_list, 600)
+        # update_timestamp(cache_key)
 
         return JSONResponse(content=models_list, status_code=200)
     finally:
@@ -129,11 +129,11 @@ async def models():
 
 @app.get("/model")
 async def model(model_id: str):
-    cache_key = f"model_details_{model_id}"
-    if not is_data_stale(cache_key, 3600):
-        cached_data = get_data_from_redis(cache_key)
-        if cached_data:
-            return JSONResponse(content=cached_data, status_code=200)
+    # cache_key = f"model_details_{model_id}"
+    # if not is_data_stale(cache_key, 3600):
+    #     cached_data = get_data_from_redis(cache_key)
+    #     if cached_data:
+    #         return JSONResponse(content=cached_data, status_code=200)
 
     session = Session()
 
@@ -152,8 +152,8 @@ async def model(model_id: str):
                                                                                               0].score_count > 0 else 0
         }
 
-        set_data_in_redis(cache_key, model_data, 3600)
-        update_timestamp(cache_key)
+        # set_data_in_redis(cache_key, model_data, 3600)
+        # update_timestamp(cache_key)
 
         return JSONResponse(content=model_data, status_code=200)
     finally:
@@ -223,11 +223,11 @@ async def prediction(model_id: str, file: UploadFile):
 
 @app.get("/model_details")
 async def model_details(model_id: str):
-    cache_key = f"model_details_{model_id}"
-    if not is_data_stale(cache_key, 3600):
-        cached_data = get_data_from_redis(cache_key)
-        if cached_data:
-            return JSONResponse(content=cached_data, status_code=200)
+    # cache_key = f"model_details_{model_id}"
+    # if not is_data_stale(cache_key, 3600):
+    #     cached_data = get_data_from_redis(cache_key)
+    #     if cached_data:
+    #         return JSONResponse(content=cached_data, status_code=200)
 
     session = Session()
 
@@ -243,9 +243,8 @@ async def model_details(model_id: str):
 
         model_details_data = {"params": data.params, "metrics": data.metrics, "tags": tags}
 
-        # Update cache with new data
-        set_data_in_redis(cache_key, model_details_data, 3600)
-        update_timestamp(cache_key)
+        # set_data_in_redis(cache_key, model_details_data, 3600)
+        # update_timestamp(cache_key)
 
         return JSONResponse(content=model_details_data, status_code=200)
     finally:
@@ -289,4 +288,4 @@ async def update_score(score: Score):
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0')
+    uvicorn.run(app, host='0.0.0.0', port=6060)
