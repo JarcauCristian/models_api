@@ -6,7 +6,6 @@ import numpy
 import pandas as pd
 import uvicorn
 from fastapi import FastAPI, UploadFile
-from dotenv import load_dotenv
 from pydantic import BaseModel
 from mlflow import MlflowClient
 from starlette.responses import JSONResponse
@@ -18,14 +17,13 @@ from redis_cache import is_data_stale, get_data_from_redis, set_data_in_redis, u
 
 app = FastAPI()
 
-load_dotenv()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["*"],
 )
 
 Base = declarative_base()
@@ -58,7 +56,7 @@ async def connection_test():
     return JSONResponse(content="Server Works!", status_code=200)
 
 
-@app.get("/model/user")
+@app.get("/model/user", tags=["GET"])
 async def models(user_id: str):
     cache_key = f"models_list_{user_id}"
     if not is_data_stale(cache_key, 600):
@@ -92,13 +90,13 @@ async def models(user_id: str):
         session.close()
 
 
-@app.get("/model/all")
+@app.get("/model/all", tags=["GET"])
 async def models():
-    # cache_key = f"models_list"
-    # if not is_data_stale(cache_key, 600):
-    #     cached_data = get_data_from_redis(cache_key)
-    #     if cached_data:
-    #         return JSONResponse(content=cached_data, status_code=200)
+    cache_key = f"models_list"
+    if not is_data_stale(cache_key, 600):
+        cached_data = get_data_from_redis(cache_key)
+        if cached_data:
+            return JSONResponse(content=cached_data, status_code=200)
 
     session = Session()
 
@@ -119,21 +117,21 @@ async def models():
                 "score": round(float(row.score / row.score_count), 2)
             })
 
-        # set_data_in_redis(cache_key, models_list, 600)
-        # update_timestamp(cache_key)
+        set_data_in_redis(cache_key, models_list, 600)
+        update_timestamp(cache_key)
 
         return JSONResponse(content=models_list, status_code=200)
     finally:
         session.close()
 
 
-@app.get("/model")
+@app.get("/model", tags=["GET"])
 async def model(model_id: str):
-    # cache_key = f"model_details_{model_id}"
-    # if not is_data_stale(cache_key, 3600):
-    #     cached_data = get_data_from_redis(cache_key)
-    #     if cached_data:
-    #         return JSONResponse(content=cached_data, status_code=200)
+    cache_key = f"model_details_{model_id}"
+    if not is_data_stale(cache_key, 3600):
+        cached_data = get_data_from_redis(cache_key)
+        if cached_data:
+            return JSONResponse(content=cached_data, status_code=200)
 
     session = Session()
 
@@ -152,22 +150,28 @@ async def model(model_id: str):
                                                                                               0].score_count > 0 else 0
         }
 
-        # set_data_in_redis(cache_key, model_data, 3600)
-        # update_timestamp(cache_key)
+        set_data_in_redis(cache_key, model_data, 3600)
+        update_timestamp(cache_key)
 
         return JSONResponse(content=model_data, status_code=200)
     finally:
         session.close()
 
 
-@app.post("/prediction")
+@app.post("/prediction", tags=["POST"])
 async def prediction(model_id: str, file: UploadFile):
     if file.content_type != "text/csv":
         return JSONResponse(content="Only CSV files Allowed!", status_code=400)
 
+    os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv("MLFLOW_TRACKING_USERNAME")
+    os.environ['MLFLOW_TRACKING_PASSWORD'] = os.getenv("MLFLOW_TRACKING_PASSWORD")
+    os.environ['AWS_ACCESS_KEY_ID'] = os.getenv("AWS_ACCESS_KEY_ID")
+    os.environ['AWS_SECRET_ACCESS_KEY'] = os.getenv("AWS_SECRET_ACCESS_KEY")
+    os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv("MLFLOW_S3_ENDPOINT_URL")
+    os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = "true"
     os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
 
-    mlflow.set_tracking_uri("https://mlflow.sedimark.work")
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_S3_ENDPOINT_URL"))
 
     session = Session()
 
@@ -221,13 +225,13 @@ async def prediction(model_id: str, file: UploadFile):
     return JSONResponse(content=data, status_code=200)
 
 
-@app.get("/model_details")
+@app.get("/model_details", tags=["GET"])
 async def model_details(model_id: str):
-    # cache_key = f"model_details_{model_id}"
-    # if not is_data_stale(cache_key, 3600):
-    #     cached_data = get_data_from_redis(cache_key)
-    #     if cached_data:
-    #         return JSONResponse(content=cached_data, status_code=200)
+    cache_key = f"model_details_{model_id}"
+    if not is_data_stale(cache_key, 3600):
+        cached_data = get_data_from_redis(cache_key)
+        if cached_data:
+            return JSONResponse(content=cached_data, status_code=200)
 
     session = Session()
 
@@ -243,15 +247,15 @@ async def model_details(model_id: str):
 
         model_details_data = {"params": data.params, "metrics": data.metrics, "tags": tags}
 
-        # set_data_in_redis(cache_key, model_details_data, 3600)
-        # update_timestamp(cache_key)
+        set_data_in_redis(cache_key, model_details_data, 3600)
+        update_timestamp(cache_key)
 
         return JSONResponse(content=model_details_data, status_code=200)
     finally:
         session.close()
 
 
-@app.get("/model_score")
+@app.get("/model_score", tags=["GET"])
 async def model_score(model_id: str):
     session = Session()
 
@@ -264,7 +268,7 @@ async def model_score(model_id: str):
     return JSONResponse(content=round(result.score / result.score_count, 2), status_code=200)
 
 
-@app.post("/update_score")
+@app.post("/update_score", tags=["POST"])
 async def update_score(score: Score):
     if score.score < 0 or score.score > 10:
         return JSONResponse(content="Score should be between 0 and 10!", status_code=400)
