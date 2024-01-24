@@ -3,16 +3,15 @@ import json
 import os
 import mlflow
 import numpy
-import pandas as pd
 import uvicorn
-from fastapi import FastAPI, UploadFile
+import pandas as pd
 from pydantic import BaseModel
 from mlflow import MlflowClient
+from fastapi import FastAPI, UploadFile
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import create_engine, Column, String, DateTime, Numeric, Integer
-
 from redis_cache import is_data_stale, get_data_from_redis, set_data_in_redis, update_timestamp
 
 app = FastAPI()
@@ -292,4 +291,4 @@ async def update_score(score: Score):
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=6060)
+    uvicorn.run(app, host='0.0.0.0')
