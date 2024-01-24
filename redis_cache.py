@@ -1,7 +1,7 @@
 from redis import StrictRedis
 from datetime import datetime, timedelta
 
-redis_client = StrictRedis(host='localhost', port=6379, db=0)
+redis_client = StrictRedis(host='192.168.1.2', port=6379, db=0)
 
 
 def get_data_from_redis(key):

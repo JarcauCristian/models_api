@@ -1,8 +1,9 @@
 import decimal
 import json
 import os
-import mlflow
 import numpy
+import torch
+import mlflow
 import uvicorn
 import pandas as pd
 from pydantic import BaseModel
@@ -84,6 +85,8 @@ async def models(user_id: str):
         set_data_in_redis(cache_key, models_list, 600)
         update_timestamp(cache_key)
 
+        session.close()
+
         return JSONResponse(content=models_list, status_code=200)
     finally:
         session.close()
@@ -96,9 +99,8 @@ async def models():
         cached_data = get_data_from_redis(cache_key)
         if cached_data:
             return JSONResponse(content=cached_data, status_code=200)
-
+        
     session = Session()
-
     try:
         results = session.query(MyTable).all()
 
@@ -119,9 +121,12 @@ async def models():
         set_data_in_redis(cache_key, models_list, 600)
         update_timestamp(cache_key)
 
-        return JSONResponse(content=models_list, status_code=200)
-    finally:
         session.close()
+
+        return JSONResponse(content=models_list, status_code=200)
+    except:
+        session.close()
+        return JSONResponse(content="Could not get models!", status_code=500)
 
 
 @app.get("/model", tags=["GET"])
@@ -145,16 +150,18 @@ async def model(model_id: str):
             "model_name": results[0].model_name,
             "description": results[0].description,
             "created_at": str(results[0].created_at),
-            "score": round(float(results[0].score) / float(results[0].score_count), 2) if results[
-                                                                                              0].score_count > 0 else 0
+            "score": round(float(results[0].score) / float(results[0].score_count), 2) if results[0].score_count > 0 else 0
         }
 
         set_data_in_redis(cache_key, model_data, 3600)
         update_timestamp(cache_key)
 
-        return JSONResponse(content=model_data, status_code=200)
-    finally:
         session.close()
+
+        return JSONResponse(content=model_data, status_code=200)
+    except:
+        session.close()
+        return JSONResponse(content="Could not get model!", status_code=500)
 
 
 @app.post("/prediction", tags=["POST"])
@@ -212,16 +219,29 @@ async def prediction(model_id: str, file: UploadFile):
     if (numeric_columns != numeric_count or categorical_columns != categorical_count or unique_identifiers_columns !=
             unique_identifier_count):
         return JSONResponse(content="Dataset format does not match the model input!", status_code=400)
+    
+    if results.notebook_type == "sklearn":    
+        sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
 
-    sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
+        predictions: numpy.ndarray = sk_model.predict(df)
+        data = {}
 
-    predictions: numpy.ndarray = sk_model.predict(df)
-    data = {}
+        for i, row in enumerate(predictions):
+            data[i] = round(float(row), 2)
 
-    for i, row in enumerate(predictions):
-        data[i] = round(float(row), 2)
+        return JSONResponse(content=data, status_code=200)
+    else:
+        pt_model = mlflow.pytorch.load_model(f"runs:/{model_id}/model")
 
-    return JSONResponse(content=data, status_code=200)
+        predictions = {}
+        for index, row in df.iterrows():
+            tensor = torch.tensor(row.values, dtype=torch.float32)
+            prediction = pt_model(tensor)
+            predictions[index] = round(float(prediction.data.item()), 2)
+
+        return JSONResponse(content=predictions, status_code=200)
+
+    
 
 
 @app.get("/model_details", tags=["GET"])
@@ -249,9 +269,12 @@ async def model_details(model_id: str):
         set_data_in_redis(cache_key, model_details_data, 3600)
         update_timestamp(cache_key)
 
-        return JSONResponse(content=model_details_data, status_code=200)
-    finally:
         session.close()
+
+        return JSONResponse(content=model_details_data, status_code=200)
+    except:
+        session.close()
+        return JSONResponse(content="Could not get the details of the model!", status_code=500)
 
 
 @app.get("/model_score", tags=["GET"])

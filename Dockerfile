@@ -14,6 +14,8 @@ COPY . .
 
 RUN pip install -r requirements.txt
 
+RUN pip3 install torch --index-url https://download.pytorch.org/whl/cpu
+
 ENV POSTGRES_USER = postgres
 ENV POSTGRES_PASSWORD = postgres
 ENV POSTGRES_HOST = 127.0.0.1
