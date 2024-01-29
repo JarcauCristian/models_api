@@ -17,7 +17,6 @@ from redis_cache import is_data_stale, get_data_from_redis, set_data_in_redis, u
 
 app = FastAPI()
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,19 +43,20 @@ class MyTable(Base):
     model_name = Column(String)
     score_count = Column(Integer)
 
+password = str(os.getenv("POSTGRES_PASSWORD")).strip().replace("\n", "")
 
 engine = create_engine(f'postgresql+psycopg2://'
-                       f'{os.getenv("POSTGRES_USER")}:{os.getenv("POSTGRES_PASSWORD")}@{os.getenv("POSTGRES_HOST")}'
+                       f'{os.getenv("POSTGRES_USER")}:{password}@{os.getenv("POSTGRES_HOST")}'
                        f':{os.getenv("POSTGRES_PORT")}/{os.getenv("POSTGRES_DB")}')
 Session = sessionmaker(bind=engine)
 
 
-@app.get("/")
+@app.get("/models")
 async def connection_test():
     return JSONResponse(content="Server Works!", status_code=200)
 
 
-@app.get("/model/user", tags=["GET"])
+@app.get("/models/model/user", tags=["GET"])
 async def models(user_id: str):
     cache_key = f"models_list_{user_id}"
     if not is_data_stale(cache_key, 600):
@@ -66,33 +66,30 @@ async def models(user_id: str):
 
     session = Session()
 
-    try:
-        results = session.query(MyTable).filter(user_id == MyTable.user_id).all()
+    results = session.query(MyTable).filter(user_id == MyTable.user_id).all()
 
-        if not results:
-            return JSONResponse(content="No models found", status_code=404)
+    if not results:
+        return JSONResponse(content="No models found", status_code=404)
 
-        models_list = []
-        for row in results:
-            models_list.append({
-                "model_id": row.model_id,
-                "model_name": row.model_name,
-                "description": row.description,
-                "created_at": str(row.created_at),
-                "score": round(float(row.score / row.score_count), 2)
-            })
+    models_list = []
+    for row in results:
+        models_list.append({
+            "model_id": row.model_id,
+            "model_name": row.model_name,
+            "description": row.description,
+            "created_at": str(row.created_at),
+            "score": round(float(row.score / row.score_count), 2)
+        })
 
-        set_data_in_redis(cache_key, models_list, 600)
-        update_timestamp(cache_key)
+    set_data_in_redis(cache_key, models_list, 600)
+    update_timestamp(cache_key)
 
-        session.close()
+    session.close()
 
-        return JSONResponse(content=models_list, status_code=200)
-    finally:
-        session.close()
+    return JSONResponse(content=models_list, status_code=200)
 
 
-@app.get("/model/all", tags=["GET"])
+@app.get("/models/model/all", tags=["GET"])
 async def models():
     cache_key = f"models_list"
     if not is_data_stale(cache_key, 600):
@@ -101,35 +98,31 @@ async def models():
             return JSONResponse(content=cached_data, status_code=200)
         
     session = Session()
-    try:
-        results = session.query(MyTable).all()
 
-        if not results:
-            return JSONResponse(content="No models found", status_code=404)
+    results = session.query(MyTable).all()
 
-        models_list = []
-        for row in results:
-            models_list.append({
-                "model_id": row.model_id,
-                "user_id": row.user_id,
-                "model_name": row.model_name,
-                "description": row.description,
-                "created_at": str(row.created_at),
-                "score": round(float(row.score / row.score_count), 2)
-            })
+    if not results:
+        return JSONResponse(content="No models found", status_code=404)
+    
+    models_list = []
+    for row in results:
+        models_list.append({
+            "model_id": row.model_id,
+            "user_id": row.user_id,
+            "model_name": row.model_name,
+            "description": row.description,
+            "created_at": str(row.created_at),
+            "score": round(float(row.score / row.score_count), 2)
+        })
 
-        set_data_in_redis(cache_key, models_list, 600)
-        update_timestamp(cache_key)
+    set_data_in_redis(cache_key, models_list, 600)
+    update_timestamp(cache_key)
 
-        session.close()
-
-        return JSONResponse(content=models_list, status_code=200)
-    except:
-        session.close()
-        return JSONResponse(content="Could not get models!", status_code=500)
+    session.close()
+    return JSONResponse(content=models_list, status_code=200)
 
 
-@app.get("/model", tags=["GET"])
+@app.get("/models/model", tags=["GET"])
 async def model(model_id: str):
     cache_key = f"model_details_{model_id}"
     if not is_data_stale(cache_key, 3600):
@@ -139,40 +132,35 @@ async def model(model_id: str):
 
     session = Session()
 
-    try:
-        results = session.query(MyTable).filter(model_id == MyTable.model_id).all()
+    results = session.query(MyTable).filter(model_id == MyTable.model_id).all()
 
-        if not results:
-            return JSONResponse(content="No model found with that ID.", status_code=404)
+    if not results:
+        return JSONResponse(content="No model found with that ID.", status_code=404)
+    
+    model_data = {
+        "model_id": results[0].model_id,
+        "model_name": results[0].model_name,
+        "description": results[0].description,
+        "created_at": str(results[0].created_at),
+        "score": round(float(results[0].score) / float(results[0].score_count), 2) if results[0].score_count > 0 else 0
+    }
 
-        model_data = {
-            "model_id": results[0].model_id,
-            "model_name": results[0].model_name,
-            "description": results[0].description,
-            "created_at": str(results[0].created_at),
-            "score": round(float(results[0].score) / float(results[0].score_count), 2) if results[0].score_count > 0 else 0
-        }
+    set_data_in_redis(cache_key, model_data, 3600)
+    update_timestamp(cache_key)
 
-        set_data_in_redis(cache_key, model_data, 3600)
-        update_timestamp(cache_key)
-
-        session.close()
-
-        return JSONResponse(content=model_data, status_code=200)
-    except:
-        session.close()
-        return JSONResponse(content="Could not get model!", status_code=500)
+    session.close()
+    return JSONResponse(content=model_data, status_code=200)
 
 
-@app.post("/prediction", tags=["POST"])
+@app.post("/models/prediction", tags=["POST"])
 async def prediction(model_id: str, file: UploadFile):
     if file.content_type != "text/csv":
         return JSONResponse(content="Only CSV files Allowed!", status_code=400)
 
     os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv("MLFLOW_TRACKING_USERNAME")
-    os.environ['MLFLOW_TRACKING_PASSWORD'] = os.getenv("MLFLOW_TRACKING_PASSWORD")
+    os.environ['MLFLOW_TRACKING_PASSWORD'] = str(os.getenv("MLFLOW_TRACKING_PASSWORD")).strip().replace("\n", "")
     os.environ['AWS_ACCESS_KEY_ID'] = os.getenv("AWS_ACCESS_KEY_ID")
-    os.environ['AWS_SECRET_ACCESS_KEY'] = os.getenv("AWS_SECRET_ACCESS_KEY")
+    os.environ['AWS_SECRET_ACCESS_KEY'] = str(os.getenv("AWS_SECRET_ACCESS_KEY")).strip().replace("\n", "")
     os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv("MLFLOW_S3_ENDPOINT_URL")
     os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = "true"
     os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
@@ -244,7 +232,7 @@ async def prediction(model_id: str, file: UploadFile):
     
 
 
-@app.get("/model_details", tags=["GET"])
+@app.get("/models/model_details", tags=["GET"])
 async def model_details(model_id: str):
     cache_key = f"model_details_{model_id}"
     if not is_data_stale(cache_key, 3600):
@@ -254,30 +242,26 @@ async def model_details(model_id: str):
 
     session = Session()
 
-    try:
-        result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
+    result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
 
-        if result is None:
-            return JSONResponse(content="Model ID Not Found!", status_code=404)
+    if result is None:
+        return JSONResponse(content="Model ID Not Found!", status_code=404)
 
-        client = MlflowClient(tracking_uri="https://mlflow.sedimark.work")
-        data = client.get_run(model_id).data
-        tags = {k: v for k, v in data.tags.items() if not k.startswith("mlflow.")}
+    client = MlflowClient(tracking_uri="https://mlflow.sedimark.work")
+    data = client.get_run(model_id).data
+    tags = {k: v for k, v in data.tags.items() if not k.startswith("mlflow.")}
 
-        model_details_data = {"params": data.params, "metrics": data.metrics, "tags": tags}
+    model_details_data = {"params": data.params, "metrics": data.metrics, "tags": tags}
 
-        set_data_in_redis(cache_key, model_details_data, 3600)
-        update_timestamp(cache_key)
+    set_data_in_redis(cache_key, model_details_data, 3600)
+    update_timestamp(cache_key)
 
-        session.close()
+    session.close()
 
-        return JSONResponse(content=model_details_data, status_code=200)
-    except:
-        session.close()
-        return JSONResponse(content="Could not get the details of the model!", status_code=500)
+    return JSONResponse(content=model_details_data, status_code=200)
 
 
-@app.get("/model_score", tags=["GET"])
+@app.get("/models/model_score", tags=["GET"])
 async def model_score(model_id: str):
     session = Session()
 
@@ -290,7 +274,7 @@ async def model_score(model_id: str):
     return JSONResponse(content=round(result.score / result.score_count, 2), status_code=200)
 
 
-@app.post("/update_score", tags=["POST"])
+@app.post("/models/update_score", tags=["POST"])
 async def update_score(score: Score):
     if score.score < 0 or score.score > 10:
         return JSONResponse(content="Score should be between 0 and 10!", status_code=400)
