@@ -1,14 +1,15 @@
-import decimal
 import json
 import os
 import numpy
 import torch
 import mlflow
+import decimal
 import uvicorn
+import requests
 import pandas as pd
 from pydantic import BaseModel
 from mlflow import MlflowClient
-from fastapi import FastAPI, UploadFile
+from fastapi import FastAPI, UploadFile, Header
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -57,7 +58,15 @@ async def connection_test():
 
 
 @app.get("/models/model/user", tags=["GET"])
-async def models(user_id: str):
+async def models(user_id: str, authorization: str = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401, content="Unauthorized!")
+    
+    token = authorization.split(" ")[1]
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    if response.status_code != 200:
+        return JSONResponse(status_code=401, content="Unauthorized!")
+
     cache_key = f"models_list_{user_id}"
     if not is_data_stale(cache_key, 600):
         cached_data = get_data_from_redis(cache_key)
@@ -90,7 +99,15 @@ async def models(user_id: str):
 
 
 @app.get("/models/model/all", tags=["GET"])
-async def models():
+async def models(authorization: str = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401, content="Unauthorized!")
+    
+    token = authorization.split(" ")[1]
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    if response.status_code != 200:
+        return JSONResponse(status_code=401, content="Unauthorized!")
+
     cache_key = f"models_list"
     if not is_data_stale(cache_key, 600):
         cached_data = get_data_from_redis(cache_key)
@@ -123,7 +140,15 @@ async def models():
 
 
 @app.get("/models/model", tags=["GET"])
-async def model(model_id: str):
+async def model(model_id: str, authorization: str = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401, content="Unauthorized!")
+    
+    token = authorization.split(" ")[1]
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    if response.status_code != 200:
+        return JSONResponse(status_code=401, content="Unauthorized!")
+
     cache_key = f"model_details_{model_id}"
     if not is_data_stale(cache_key, 3600):
         cached_data = get_data_from_redis(cache_key)
@@ -153,7 +178,15 @@ async def model(model_id: str):
 
 
 @app.post("/models/prediction", tags=["POST"])
-async def prediction(model_id: str, file: UploadFile):
+async def prediction(model_id: str, file: UploadFile, authorization: str = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401, content="Unauthorized!")
+    
+    token = authorization.split(" ")[1]
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    if response.status_code != 200:
+        return JSONResponse(status_code=401, content="Unauthorized!")
+
     if file.content_type != "text/csv":
         return JSONResponse(content="Only CSV files Allowed!", status_code=400)
 
@@ -233,7 +266,15 @@ async def prediction(model_id: str, file: UploadFile):
 
 
 @app.get("/models/model_details", tags=["GET"])
-async def model_details(model_id: str):
+async def model_details(model_id: str, authorization: str = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401, content="Unauthorized!")
+    
+    token = authorization.split(" ")[1]
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    if response.status_code != 200:
+        return JSONResponse(status_code=401, content="Unauthorized!")
+
     cache_key = f"model_details_{model_id}"
     if not is_data_stale(cache_key, 3600):
         cached_data = get_data_from_redis(cache_key)
@@ -262,7 +303,15 @@ async def model_details(model_id: str):
 
 
 @app.get("/models/model_score", tags=["GET"])
-async def model_score(model_id: str):
+async def model_score(model_id: str, authorization: str = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401, content="Unauthorized!")
+    
+    token = authorization.split(" ")[1]
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    if response.status_code != 200:
+        return JSONResponse(status_code=401, content="Unauthorized!")
+
     session = Session()
 
     result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
@@ -275,7 +324,15 @@ async def model_score(model_id: str):
 
 
 @app.post("/models/update_score", tags=["POST"])
-async def update_score(score: Score):
+async def update_score(score: Score, authorization: str = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401, content="Unauthorized!")
+    
+    token = authorization.split(" ")[1]
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    if response.status_code != 200:
+        return JSONResponse(status_code=401, content="Unauthorized!")
+
     if score.score < 0 or score.score > 10:
         return JSONResponse(content="Score should be between 0 and 10!", status_code=400)
 

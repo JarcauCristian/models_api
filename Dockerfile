@@ -27,6 +27,7 @@ ENV MLFLOW_TRACKING_PASSWORD = password
 ENV AWS_ACCESS_KEY_ID = username
 ENV AWS_SECRET_ACCESS_KEY = password
 ENV MLFLOW_S3_ENDPOINT_URL = http://localhost
+ENV KEYCLOAK_URL = https://keycloak.sedimark.work/auth/realms/react-keycloak/protocol/openid-connect/userinfo
 
 EXPOSE 8000
 
