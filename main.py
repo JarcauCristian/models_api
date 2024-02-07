@@ -63,7 +63,7 @@ async def models(user_id: str, authorization: str = Header(None)):
         return JSONResponse(status_code=401, content="Unauthorized!")
     
     token = authorization.split(" ")[1]
-    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"})
     if response.status_code != 200:
         return JSONResponse(status_code=401, content="Unauthorized!")
 
@@ -104,7 +104,7 @@ async def models(authorization: str = Header(None)):
         return JSONResponse(status_code=401, content="Unauthorized!")
     
     token = authorization.split(" ")[1]
-    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"})
     if response.status_code != 200:
         return JSONResponse(status_code=401, content="Unauthorized!")
 
@@ -145,7 +145,7 @@ async def model(model_id: str, authorization: str = Header(None)):
         return JSONResponse(status_code=401, content="Unauthorized!")
     
     token = authorization.split(" ")[1]
-    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"})
     if response.status_code != 200:
         return JSONResponse(status_code=401, content="Unauthorized!")
 
@@ -183,7 +183,7 @@ async def prediction(model_id: str, file: UploadFile, authorization: str = Heade
         return JSONResponse(status_code=401, content="Unauthorized!")
     
     token = authorization.split(" ")[1]
-    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"})
     if response.status_code != 200:
         return JSONResponse(status_code=401, content="Unauthorized!")
 
@@ -271,7 +271,7 @@ async def model_details(model_id: str, authorization: str = Header(None)):
         return JSONResponse(status_code=401, content="Unauthorized!")
     
     token = authorization.split(" ")[1]
-    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"})
     if response.status_code != 200:
         return JSONResponse(status_code=401, content="Unauthorized!")
 
@@ -308,7 +308,7 @@ async def model_score(model_id: str, authorization: str = Header(None)):
         return JSONResponse(status_code=401, content="Unauthorized!")
     
     token = authorization.split(" ")[1]
-    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"})
     if response.status_code != 200:
         return JSONResponse(status_code=401, content="Unauthorized!")
 
@@ -329,7 +329,7 @@ async def update_score(score: Score, authorization: str = Header(None)):
         return JSONResponse(status_code=401, content="Unauthorized!")
     
     token = authorization.split(" ")[1]
-    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"}, verify=False)
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"})
     if response.status_code != 200:
         return JSONResponse(status_code=401, content="Unauthorized!")
 
