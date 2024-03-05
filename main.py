@@ -1,17 +1,20 @@
-import json
 import os
+import json
 import numpy
 import torch
+import shutil
+import joblib
 import mlflow
 import decimal
 import uvicorn
 import requests
+import tempfile
 import pandas as pd
 from pydantic import BaseModel
 from mlflow import MlflowClient
-from fastapi import FastAPI, UploadFile, Header
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, UploadFile, Header, Response
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import create_engine, Column, String, DateTime, Numeric, Integer
 from redis_cache import is_data_stale, get_data_from_redis, set_data_in_redis, update_timestamp
@@ -43,6 +46,8 @@ class MyTable(Base):
     score = Column(Numeric)
     model_name = Column(String)
     score_count = Column(Integer)
+    dataset_user = Column(String)
+    notebook_type = Column(String)
 
 password = str(os.getenv("POSTGRES_PASSWORD")).strip().replace("\n", "")
 
@@ -87,6 +92,7 @@ async def models(user_id: str, authorization: str = Header(None)):
             "model_name": row.model_name,
             "description": row.description,
             "created_at": str(row.created_at),
+            "notebook_type": row.notebook_type,
             "score": round(float(row.score / row.score_count), 2)
         })
 
@@ -126,9 +132,11 @@ async def models(authorization: str = Header(None)):
         models_list.append({
             "model_id": row.model_id,
             "user_id": row.user_id,
+            "dataset_user": row.dataset_user,
             "model_name": row.model_name,
             "description": row.description,
             "created_at": str(row.created_at),
+            "notebook_type": row.notebook_type,
             "score": round(float(row.score / row.score_count), 2)
         })
 
@@ -167,6 +175,7 @@ async def model(model_id: str, authorization: str = Header(None)):
         "model_name": results[0].model_name,
         "description": results[0].description,
         "created_at": str(results[0].created_at),
+        "notebook_type": results[0].notebook_type,
         "score": round(float(results[0].score) / float(results[0].score_count), 2) if results[0].score_count > 0 else 0
     }
 
@@ -251,7 +260,7 @@ async def prediction(model_id: str, file: UploadFile, authorization: str = Heade
             data[i] = round(float(row), 2)
 
         return JSONResponse(content=data, status_code=200)
-    else:
+    elif results.notebook_type == "pytorch":
         pt_model = mlflow.pytorch.load_model(f"runs:/{model_id}/model")
 
         predictions = {}
@@ -261,8 +270,69 @@ async def prediction(model_id: str, file: UploadFile, authorization: str = Heade
             predictions[index] = round(float(prediction.data.item()), 2)
 
         return JSONResponse(content=predictions, status_code=200)
+    
+    return JSONResponse(content="Notebook Type not known!", status_code=404)
 
     
+@app.get("/models/download", tags=["GET"])
+async def download_model(model_id: str, authorization: str = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401, content="Unauthorized!")
+    
+    token = authorization.split(" ")[1]
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"})
+    if response.status_code != 200:
+        return JSONResponse(status_code=401, content="Unauthorized!")
+    
+    os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv("MLFLOW_TRACKING_USERNAME")
+    os.environ['MLFLOW_TRACKING_PASSWORD'] = str(os.getenv("MLFLOW_TRACKING_PASSWORD")).strip().replace("\n", "")
+    os.environ['AWS_ACCESS_KEY_ID'] = os.getenv("AWS_ACCESS_KEY_ID")
+    os.environ['AWS_SECRET_ACCESS_KEY'] = str(os.getenv("AWS_SECRET_ACCESS_KEY")).strip().replace("\n", "")
+    os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv("MLFLOW_S3_ENDPOINT_URL")
+    os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = "true"
+    os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
+
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_S3_ENDPOINT_URL"))
+    
+    with Session() as session:
+        results = session.query(MyTable).filter(model_id == MyTable.model_id).first()
+
+        if results is None:
+            return JSONResponse(content="Model ID Not Found!", status_code=404)
+        
+        if results.notebook_type == "sklearn":
+
+            sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
+            with tempfile.TemporaryDirectory() as temp_dir:
+                joblib.dump(sk_model, os.path.join(temp_dir, f"{model_id}.pkl"))
+                model_filename = os.path.join(temp_dir, f"{model_id}.pkl")
+
+                return Response(content=open(model_filename, "rb").read(),
+                                media_type="application/octet-stream")
+        elif results.notebook_type == "pytorch":
+
+            pt_model = mlflow.pytorch.load_model(f"runs:/{model_id}/model")
+            with tempfile.TemporaryDirectory() as temp_dir:
+                joblib.dump(pt_model.state_dict(), os.path.join(temp_dir, f"{model_id}.pkl"))
+                model_filename = os.path.join(temp_dir, f"{model_id}.pkl")
+
+                return Response(content=open(model_filename, "rb").read(),
+                                media_type="application/octet-stream")
+        elif results.notebook_type == "transformers":
+            trans_model = mlflow.transformers.load_model(f"runs:/{model_id}/model")
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                trans_model["model"].save_pretrained(temp_dir)
+                trans_model["tokenizer"].to_json_file(os.path.join(temp_dir, "config.json"))
+
+                zip_filename = "model.zip"
+                shutil.make_archive(zip_filename, 'zip', temp_dir)
+
+                with open(zip_filename + ".zip", "rb") as f:
+                    model_bytes = f.read()
+
+                return Response(content=model_bytes,
+                                media_type="application/octet-stream")
 
 
 @app.get("/models/model_details", tags=["GET"])
