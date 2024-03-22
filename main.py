@@ -1,9 +1,9 @@
 import os
+import io
 import json
 import numpy
-import torch
-import shutil
 import joblib
+import base64
 import mlflow
 import decimal
 import uvicorn
@@ -11,13 +11,16 @@ import requests
 import tempfile
 import pandas as pd
 from pydantic import BaseModel
-from mlflow import MlflowClient
 from starlette.responses import JSONResponse
+from mlflow import MlflowClient, MlflowException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, UploadFile, Header, Response
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import create_engine, Column, String, DateTime, Numeric, Integer
 from redis_cache import is_data_stale, get_data_from_redis, set_data_in_redis, update_timestamp
+from dotenv import load_dotenv
+
+load_dotenv(".env")
 
 app = FastAPI()
 
@@ -207,7 +210,7 @@ async def prediction(model_id: str, file: UploadFile, authorization: str = Heade
     os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = "true"
     os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
 
-    mlflow.set_tracking_uri(os.getenv("MLFLOW_S3_ENDPOINT_URL"))
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
 
     session = Session()
 
@@ -249,29 +252,16 @@ async def prediction(model_id: str, file: UploadFile, authorization: str = Heade
     if (numeric_columns != numeric_count or categorical_columns != categorical_count or unique_identifiers_columns !=
             unique_identifier_count):
         return JSONResponse(content="Dataset format does not match the model input!", status_code=400)
-    
-    if results.notebook_type == "sklearn":    
-        sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
+       
+    sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
 
-        predictions: numpy.ndarray = sk_model.predict(df)
-        data = {}
+    predictions: numpy.ndarray = sk_model.predict(df)
+    data = {}
 
-        for i, row in enumerate(predictions):
-            data[i] = round(float(row), 2)
+    for i, row in enumerate(predictions):
+        data[i] = round(float(row), 2)
 
-        return JSONResponse(content=data, status_code=200)
-    elif results.notebook_type == "pytorch":
-        pt_model = mlflow.pytorch.load_model(f"runs:/{model_id}/model")
-
-        predictions = {}
-        for index, row in df.iterrows():
-            tensor = torch.tensor(row.values, dtype=torch.float32)
-            prediction = pt_model(tensor)
-            predictions[index] = round(float(prediction.data.item()), 2)
-
-        return JSONResponse(content=predictions, status_code=200)
-    
-    return JSONResponse(content="Notebook Type not known!", status_code=404)
+    return JSONResponse(content=data, status_code=200)
 
     
 @app.get("/models/download", tags=["GET"])
@@ -292,47 +282,21 @@ async def download_model(model_id: str, authorization: str = Header(None)):
     os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = "true"
     os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
 
-    mlflow.set_tracking_uri(os.getenv("MLFLOW_S3_ENDPOINT_URL"))
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
     
     with Session() as session:
         results = session.query(MyTable).filter(model_id == MyTable.model_id).first()
 
         if results is None:
             return JSONResponse(content="Model ID Not Found!", status_code=404)
-        
-        if results.notebook_type == "sklearn":
 
-            sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
-            with tempfile.TemporaryDirectory() as temp_dir:
-                joblib.dump(sk_model, os.path.join(temp_dir, f"{model_id}.pkl"))
-                model_filename = os.path.join(temp_dir, f"{model_id}.pkl")
+        sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            joblib.dump(sk_model, os.path.join(temp_dir, f"{model_id}.pkl"))
+            model_filename = os.path.join(temp_dir, f"{model_id}.pkl")
 
-                return Response(content=open(model_filename, "rb").read(),
-                                media_type="application/octet-stream")
-        elif results.notebook_type == "pytorch":
-
-            pt_model = mlflow.pytorch.load_model(f"runs:/{model_id}/model")
-            with tempfile.TemporaryDirectory() as temp_dir:
-                joblib.dump(pt_model.state_dict(), os.path.join(temp_dir, f"{model_id}.pkl"))
-                model_filename = os.path.join(temp_dir, f"{model_id}.pkl")
-
-                return Response(content=open(model_filename, "rb").read(),
-                                media_type="application/octet-stream")
-        elif results.notebook_type == "transformers":
-            trans_model = mlflow.transformers.load_model(f"runs:/{model_id}/model")
-
-            with tempfile.TemporaryDirectory() as temp_dir:
-                trans_model["model"].save_pretrained(temp_dir)
-                trans_model["tokenizer"].to_json_file(os.path.join(temp_dir, "config.json"))
-
-                zip_filename = "model.zip"
-                shutil.make_archive(zip_filename, 'zip', temp_dir)
-
-                with open(zip_filename + ".zip", "rb") as f:
-                    model_bytes = f.read()
-
-                return Response(content=model_bytes,
-                                media_type="application/octet-stream")
+            return Response(content=open(model_filename, "rb").read(),
+                            media_type="application/octet-stream")
 
 
 @app.get("/models/model_details", tags=["GET"])
@@ -358,7 +322,7 @@ async def model_details(model_id: str, authorization: str = Header(None)):
     if result is None:
         return JSONResponse(content="Model ID Not Found!", status_code=404)
 
-    client = MlflowClient(tracking_uri="https://mlflow.sedimark.work")
+    client = MlflowClient(tracking_uri=os.getenv("MLFLOW_TRACKING_URI"))
     data = client.get_run(model_id).data
     tags = {k: v for k, v in data.tags.items() if not k.startswith("mlflow.")}
 
@@ -370,6 +334,55 @@ async def model_details(model_id: str, authorization: str = Header(None)):
     session.close()
 
     return JSONResponse(content=model_details_data, status_code=200)
+
+
+@app.get("/models/model_images", tags=["GET"])
+async def model_images(model_id: str, authorization: str = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401, content="Unauthorized!")
+    
+    token = authorization.split(" ")[1]
+    response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"})
+    if response.status_code != 200:
+        return JSONResponse(status_code=401, content="Unauthorized!")
+
+    session = Session()
+
+    result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
+
+    if result is None:
+        return JSONResponse(content="Model ID Not Found!", status_code=404)
+
+    os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv("MLFLOW_TRACKING_USERNAME")
+    os.environ['MLFLOW_TRACKING_PASSWORD'] = str(os.getenv("MLFLOW_TRACKING_PASSWORD")).strip().replace("\n", "")
+    os.environ['AWS_ACCESS_KEY_ID'] = os.getenv("AWS_ACCESS_KEY_ID")
+    os.environ['AWS_SECRET_ACCESS_KEY'] = str(os.getenv("AWS_SECRET_ACCESS_KEY")).strip().replace("\n", "")
+    os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv("MLFLOW_S3_ENDPOINT_URL")
+    os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = "true"
+    os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
+
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+
+    client = MlflowClient(tracking_uri=os.getenv("MLFLOW_TRACKING_URI"))
+    images = {}
+    try:
+        artifacts = client.list_artifacts(model_id)
+        for artifact in artifacts:
+            if ".png" in artifact.path:
+                print(artifact.path)
+                image = mlflow.artifacts.load_image(f"runs:/{model_id}/{artifact.path}")
+                buffered = io.BytesIO()
+                image_format = image.format if image.format else 'PNG'
+                image.save(buffered, format=image_format)
+                images[str(artifact.path).split("/")[-1]] = (f"data:image/png;base64,"
+                                                             f"{(base64.b64encode(buffered.getvalue()).decode('utf-8'))}")
+    except MlflowException:
+        session.close()
+        return JSONResponse(status_code=500, content="Could not get all the images!")
+
+    session.close()
+
+    return JSONResponse(content=images, status_code=200)
 
 
 @app.get("/models/model_score", tags=["GET"])
