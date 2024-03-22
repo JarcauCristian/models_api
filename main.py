@@ -52,6 +52,7 @@ class MyTable(Base):
     dataset_user = Column(String)
     notebook_type = Column(String)
 
+
 password = str(os.getenv("POSTGRES_PASSWORD")).strip().replace("\n", "")
 
 engine = create_engine(f'postgresql+psycopg2://'
@@ -202,14 +203,6 @@ async def prediction(model_id: str, file: UploadFile, authorization: str = Heade
     if file.content_type != "text/csv":
         return JSONResponse(content="Only CSV files Allowed!", status_code=400)
 
-    os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv("MLFLOW_TRACKING_USERNAME")
-    os.environ['MLFLOW_TRACKING_PASSWORD'] = str(os.getenv("MLFLOW_TRACKING_PASSWORD")).strip().replace("\n", "")
-    os.environ['AWS_ACCESS_KEY_ID'] = os.getenv("AWS_ACCESS_KEY_ID")
-    os.environ['AWS_SECRET_ACCESS_KEY'] = str(os.getenv("AWS_SECRET_ACCESS_KEY")).strip().replace("\n", "")
-    os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv("MLFLOW_S3_ENDPOINT_URL")
-    os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = "true"
-    os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
-
     mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
 
     session = Session()
@@ -252,8 +245,11 @@ async def prediction(model_id: str, file: UploadFile, authorization: str = Heade
     if (numeric_columns != numeric_count or categorical_columns != categorical_count or unique_identifiers_columns !=
             unique_identifier_count):
         return JSONResponse(content="Dataset format does not match the model input!", status_code=400)
+
+    client = MlflowClient()
+    run_id = client.get_registered_model(model_id).latest_versions[0].run_id
        
-    sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
+    sk_model = mlflow.sklearn.load_model(f"runs:/{run_id}/model")
 
     predictions: numpy.ndarray = sk_model.predict(df)
     data = {}
@@ -273,14 +269,6 @@ async def download_model(model_id: str, authorization: str = Header(None)):
     response = requests.get(os.getenv("KEYCLOAK_URL"), headers={"Authorization": f"Bearer {token}"})
     if response.status_code != 200:
         return JSONResponse(status_code=401, content="Unauthorized!")
-    
-    os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv("MLFLOW_TRACKING_USERNAME")
-    os.environ['MLFLOW_TRACKING_PASSWORD'] = str(os.getenv("MLFLOW_TRACKING_PASSWORD")).strip().replace("\n", "")
-    os.environ['AWS_ACCESS_KEY_ID'] = os.getenv("AWS_ACCESS_KEY_ID")
-    os.environ['AWS_SECRET_ACCESS_KEY'] = str(os.getenv("AWS_SECRET_ACCESS_KEY")).strip().replace("\n", "")
-    os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv("MLFLOW_S3_ENDPOINT_URL")
-    os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = "true"
-    os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
 
     mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
     
@@ -290,13 +278,15 @@ async def download_model(model_id: str, authorization: str = Header(None)):
         if results is None:
             return JSONResponse(content="Model ID Not Found!", status_code=404)
 
-        sk_model = mlflow.sklearn.load_model(f"runs:/{model_id}/model")
-        with tempfile.TemporaryDirectory() as temp_dir:
-            joblib.dump(sk_model, os.path.join(temp_dir, f"{model_id}.pkl"))
-            model_filename = os.path.join(temp_dir, f"{model_id}.pkl")
+    client = MlflowClient()
+    run_id = client.get_registered_model(model_id).latest_versions[0].run_id
 
-            return Response(content=open(model_filename, "rb").read(),
-                            media_type="application/octet-stream")
+    sk_model = mlflow.sklearn.load_model(f"runs:/{run_id}/model")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        joblib.dump(sk_model, os.path.join(temp_dir, f"{results.model_name}.pkl"))
+        model_filename = os.path.join(temp_dir, f"{results.model_name}.pkl")
+
+        return Response(content=open(model_filename, "rb").read(), media_type="application/octet-stream")
 
 
 @app.get("/models/model_details", tags=["GET"])
@@ -315,23 +305,25 @@ async def model_details(model_id: str, authorization: str = Header(None)):
         if cached_data:
             return JSONResponse(content=cached_data, status_code=200)
 
-    session = Session()
+    with Session() as session:
+        result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
 
-    result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
+        if result is None:
+            return JSONResponse(content="Model ID Not Found!", status_code=404)
 
-    if result is None:
-        return JSONResponse(content="Model ID Not Found!", status_code=404)
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
 
-    client = MlflowClient(tracking_uri=os.getenv("MLFLOW_TRACKING_URI"))
-    data = client.get_run(model_id).data
+    client = MlflowClient()
+    registered_model = client.get_registered_model(model_id)
+    run_id = registered_model.latest_versions[0].run_id
+    description = registered_model.description
+    data = client.get_run(run_id).data
     tags = {k: v for k, v in data.tags.items() if not k.startswith("mlflow.")}
 
-    model_details_data = {"params": data.params, "metrics": data.metrics, "tags": tags}
+    model_details_data = {"params": data.params, "metrics": data.metrics, "tags": tags, "description": description}
 
     set_data_in_redis(cache_key, model_details_data, 3600)
     update_timestamp(cache_key)
-
-    session.close()
 
     return JSONResponse(content=model_details_data, status_code=200)
 
@@ -346,41 +338,29 @@ async def model_images(model_id: str, authorization: str = Header(None)):
     if response.status_code != 200:
         return JSONResponse(status_code=401, content="Unauthorized!")
 
-    session = Session()
+    with Session() as session:
+        result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
 
-    result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
-
-    if result is None:
-        return JSONResponse(content="Model ID Not Found!", status_code=404)
-
-    os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv("MLFLOW_TRACKING_USERNAME")
-    os.environ['MLFLOW_TRACKING_PASSWORD'] = str(os.getenv("MLFLOW_TRACKING_PASSWORD")).strip().replace("\n", "")
-    os.environ['AWS_ACCESS_KEY_ID'] = os.getenv("AWS_ACCESS_KEY_ID")
-    os.environ['AWS_SECRET_ACCESS_KEY'] = str(os.getenv("AWS_SECRET_ACCESS_KEY")).strip().replace("\n", "")
-    os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv("MLFLOW_S3_ENDPOINT_URL")
-    os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = "true"
-    os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
+        if result is None:
+            return JSONResponse(content="Model ID Not Found!", status_code=404)
 
     mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
 
-    client = MlflowClient(tracking_uri=os.getenv("MLFLOW_TRACKING_URI"))
+    client = MlflowClient()
+    run_id = client.get_registered_model(model_id).latest_versions[0].run_id
     images = {}
     try:
-        artifacts = client.list_artifacts(model_id)
+        artifacts = client.list_artifacts(run_id)
         for artifact in artifacts:
             if ".png" in artifact.path:
-                print(artifact.path)
-                image = mlflow.artifacts.load_image(f"runs:/{model_id}/{artifact.path}")
+                image = mlflow.artifacts.load_image(f"runs:/{run_id}/{artifact.path}")
                 buffered = io.BytesIO()
                 image_format = image.format if image.format else 'PNG'
                 image.save(buffered, format=image_format)
                 images[str(artifact.path).split("/")[-1]] = (f"data:image/png;base64,"
                                                              f"{(base64.b64encode(buffered.getvalue()).decode('utf-8'))}")
     except MlflowException:
-        session.close()
         return JSONResponse(status_code=500, content="Could not get all the images!")
-
-    session.close()
 
     return JSONResponse(content=images, status_code=200)
 
@@ -395,15 +375,13 @@ async def model_score(model_id: str, authorization: str = Header(None)):
     if response.status_code != 200:
         return JSONResponse(status_code=401, content="Unauthorized!")
 
-    session = Session()
+    with Session() as session:
+        result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
 
-    result = session.query(MyTable).filter(model_id == MyTable.model_id).first()
+        if result is None:
+            return JSONResponse(content="Model ID Not Found!", status_code=404)
 
-    if result is None:
-        session.close()
-        return JSONResponse(content="Model ID Not Found!", status_code=404)
-
-    return JSONResponse(content=round(result.score / result.score_count, 2), status_code=200)
+    return JSONResponse(content=round(float(result.score / result.score_count), 2), status_code=200)
 
 
 @app.post("/models/update_score", tags=["POST"])
@@ -419,23 +397,27 @@ async def update_score(score: Score, authorization: str = Header(None)):
     if score.score < 0 or score.score > 10:
         return JSONResponse(content="Score should be between 0 and 10!", status_code=400)
 
-    session = Session()
+    with Session() as session:
+        result = session.query(MyTable).filter(score.model_id == MyTable.model_id).first()
 
-    result = session.query(MyTable).filter(score.model_id == MyTable.model_id).first()
+        if result is None:
+            session.close()
+            return JSONResponse(content="Model ID Not Found!", status_code=404)
 
-    if result is None:
-        session.close()
-        return JSONResponse(content="Model ID Not Found!", status_code=404)
+        result.score += decimal.Decimal(score.score)
 
-    result.score += decimal.Decimal(score.score)
+        result.score_count += 1
 
-    result.score_count += 1
-
-    session.commit()
-    session.close()
+        session.commit()
 
     return JSONResponse(content="Score updated successfully!", status_code=200)
 
 
 if __name__ == '__main__':
+    os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv("MLFLOW_TRACKING_USERNAME")
+    os.environ['MLFLOW_TRACKING_PASSWORD'] = str(os.getenv("MLFLOW_TRACKING_PASSWORD")).strip().replace("\n", "")
+    os.environ['AWS_ACCESS_KEY_ID'] = os.getenv("AWS_ACCESS_KEY_ID")
+    os.environ['AWS_SECRET_ACCESS_KEY'] = str(os.getenv("AWS_SECRET_ACCESS_KEY")).strip().replace("\n", "")
+    os.environ['MLFLOW_S3_ENDPOINT_URL'] = os.getenv("MLFLOW_S3_ENDPOINT_URL")
+    os.environ['MLFLOW_HTTP_REQUEST_TIMEOUT'] = "1000"
     uvicorn.run(app, host='0.0.0.0')
