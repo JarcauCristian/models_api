@@ -327,7 +327,7 @@ async def download_model(model_id: str, authorization: str = Header(None)):
 
 
 @app.get("/models/model_details", tags=["GET"])
-async def model_details(model_id: str, authorization: str = Header(None)):
+async def model_details(model_id: str, changed: bool = False, authorization: str = Header(None)):
     if authorization is None or not authorization.startswith("Bearer "):
         return JSONResponse(status_code=401, content="Unauthorized!")
     
@@ -337,7 +337,7 @@ async def model_details(model_id: str, authorization: str = Header(None)):
         return JSONResponse(status_code=401, content="Unauthorized!")
 
     cache_key = f"model_details_{model_id}"
-    if not is_data_stale(cache_key, 86400):
+    if not is_data_stale(cache_key, 86400) and not changed:
         cached_data = json.loads(get_data_from_redis(cache_key))
         if cached_data:
             return JSONResponse(content=cached_data, status_code=200)
