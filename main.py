@@ -82,7 +82,7 @@ async def models_user(user_id: str, changed: bool = False, authorization: str = 
     if not is_data_stale(cache_key, 86400) and not changed:
         cached_data = get_data_from_redis(cache_key)
         if cached_data:
-            return JSONResponse(content=cached_data, status_code=200)
+            return JSONResponse(content=json.loads(cached_data), status_code=200)
 
     session = Session()
 
@@ -102,7 +102,7 @@ async def models_user(user_id: str, changed: bool = False, authorization: str = 
             "score": 0.0 if int(row.score_count) == 0 else round(float(row.score) / float(row.score_count), 2)
         })
 
-    set_data_in_redis(cache_key, models_list, 86400)
+    set_data_in_redis(cache_key, json.dumps(models_list), 86400)
     update_timestamp(cache_key)
 
     session.close()
